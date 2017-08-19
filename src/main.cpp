@@ -1,76 +1,223 @@
-/* YourDuino Example: Find Address of a DS18B20 Temperature Sensor
- Cut and paste the address to a text file for later use.
- V1.1 01/17/2013
- Questions: terry@yourduino.com
-
- Connections:
- DS18B20 Pinout (Left to Right, pins down, flat side toward you)
- - Left   = Ground
- - Center = Signal (Pin 2):  (with 3.3K to 4.7K resistor to +5 or 3.3 )
- - Right  = +5 or +3.3 V
- This sketch looks for 1-wire devices and  prints their addresses (serial number)
- to the Serial Monitor in a format that is useful in Arduino sketches.
- Based on example at:
- http://www.hacktronics.com/Tutorials/arduino-1-wire-address-finder.html
- */
-
 /*-----( Import needed libraries )-----*/
 #include <Arduino.h>
 #include <OneWire.h>
+#include <DallasTemperature.h>
+
+#include <FS.h>
+#include <ESP8266WiFi.h>
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
+#include <WifiManager.h>
+#include <ArduinoJson.h>
 
 /*-----( Declare Constants and Pin Numbers )-----*/
-#define SENSOR_PIN 5  // Any pin 2 to 12 (not 13) and A0 to A5
+#define SENSOR_PIN 12  // Any pin 2 to 12 (not 13) and A0 to A5
 
 /*-----( Declare objects )-----*/
-OneWire  ourBus(SENSOR_PIN);  // Create a 1-wire object
+OneWire  oneWire(SENSOR_PIN);  // Create a 1-wire object
+DallasTemperature sensors(&oneWire);
 
-void discoverOneWireDevices();
+//Sensor addresses
+DeviceAddress probe1 = { 0x28, 0xFF, 0x24, 0xA8, 0x52, 0x16, 0x04, 0x09 };
+DeviceAddress probe2 = { 0x28, 0xFF, 0x6B, 0x65, 0x47, 0x16, 0x03, 0xD7 };
+DeviceAddress probe3 = { 0x28, 0xFF, 0x23, 0xA0, 0x52, 0x16, 0x04, 0x44 };
 
-void setup()  /****** SETUP: RUNS ONCE ******/
-{
+
+//define your default values here, if there are different values in config.json, they are overwritten.
+char mqtt_server[40] = "blynk.kodo.gg";
+char mqtt_port[6] = "8443";
+char blynk_token[34] = "YOUR_BLYNK_TOKEN";
+
+// The extra parameters to be configured (can be either global or just in the setup)
+// After connecting, parameter.getValue() will get you the configured value
+// id/name placeholder/prompt default length
+WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
+WiFiManagerParameter custom_mqtt_port("port", "mqtt port", mqtt_port, 6);
+WiFiManagerParameter custom_blynk_token("blynk", "blynk token", blynk_token, 32);
+
+//flag for saving data
+bool shouldSaveConfig = false;
+
+//callback notifying us of the need to save config
+void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
+
+void readConfig();
+
+void connectWifi();
+
+void saveConfig();
+
+void printTemperature(DeviceAddress deviceAddress);
+
+void setup() {
   Serial.begin(9600);
 
   delay(500);
 
+  readConfig();
+  connectWifi();
+  saveConfig();
+
   pinMode(SENSOR_PIN, INPUT);
 
-  discoverOneWireDevices();  // Everything happens here!
+  sensors.setResolution(probe1, 10);
+  sensors.setResolution(probe2, 10);
+  sensors.setResolution(probe3, 10);
 }//--(end setup )---
 
-void loop()   /****** LOOP: RUNS CONSTANTLY ******/
-{
-  // Nothing happening here
-}
-
-/*-----( Declare User-written Functions )-----*/
-void discoverOneWireDevices() {
-  byte i;
-  byte present = 0;
-  byte data[12];
-  byte addr[8];
-
-  Serial.print("Looking for 1-Wire devices...\n\r");// "\n\r" is NewLine
-  while(ourBus.search(addr)) {
-    Serial.print("\n\r\n\rFound \'1-Wire\' device with address:\n\r");
-    for(i = 0; i < 8; i++) {
-      Serial.print("0x");
-      if (addr[i] < 16) {
-        Serial.print('0');
-      }
-      Serial.print(addr[i], HEX);
-      if (i < 7) {
-        Serial.print(", ");
-      }
-    }
-    if ( OneWire::crc8( addr, 7) != addr[7]) {
-      Serial.print("CRC is not valid!\n\r");
-      return;
-    }
-  }
+void loop() {
+  delay(1000);
   Serial.println();
-  Serial.print("Done");
-  ourBus.reset_search();
-  return;
+  Serial.print("Number of Devices found on bus = ");
+  Serial.println(sensors.getDeviceCount());
+  Serial.print("Getting temperatures... ");
+  Serial.println();
+
+  // Command all devices on bus to read temperature
+  sensors.requestTemperatures();
+
+  Serial.print("Probe 01 temperature is:   ");
+  printTemperature(probe1);
+  Serial.println();
+
+  Serial.print("Probe 02 temperature is:   ");
+  printTemperature(probe2);
+  Serial.println();
+
+  Serial.print("Probe 03 temperature is:   ");
+  printTemperature(probe3);
+  Serial.println();
+
+}//--(end main loop )---
+
+void printTemperature(DeviceAddress deviceAddress) {
+
+  float tempC = sensors.getTempC(deviceAddress);
+
+  if (tempC == -127.00)
+  {
+    Serial.print("Error getting temperature  ");
+  }
+  else
+  {
+    Serial.print("C: ");
+    Serial.print(tempC);
+    Serial.print(" F: ");
+    Serial.print(DallasTemperature::toFahrenheit(tempC));
+  }
+}// End printTemperature
+
+void readConfig() {
+
+  //read configuration from FS json
+  Serial.println("mounting FS...");
+
+  if (SPIFFS.begin()) {
+    Serial.println("mounted file system");
+    if (SPIFFS.exists("/config.json")) {
+      //file exists, reading and loading
+      Serial.println("reading config file");
+      File configFile = SPIFFS.open("/config.json", "r");
+      if (configFile) {
+        Serial.println("opened config file");
+        size_t size = configFile.size();
+        // Allocate a buffer to store contents of the file.
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& json = jsonBuffer.parseObject(buf.get());
+        json.printTo(Serial);
+        if (json.success()) {
+          Serial.println("\nparsed json");
+
+          strcpy(mqtt_server, json["mqtt_server"]);
+          strcpy(mqtt_port, json["mqtt_port"]);
+          strcpy(blynk_token, json["blynk_token"]);
+
+        } else {
+          Serial.println("failed to load json config");
+        }
+      }
+    }
+  } else {
+    Serial.println("failed to mount FS");
+  }
+  //end read
 }
 
+void saveConfig() {
+  //read updated parameters
+  strcpy(mqtt_server, custom_mqtt_server.getValue());
+  strcpy(mqtt_port, custom_mqtt_port.getValue());
+  strcpy(blynk_token, custom_blynk_token.getValue());
+
+  //save the custom parameters to FS
+  if (shouldSaveConfig) {
+    Serial.println("saving config");
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.createObject();
+    json["mqtt_server"] = mqtt_server;
+    json["mqtt_port"] = mqtt_port;
+    json["blynk_token"] = blynk_token;
+
+    File configFile = SPIFFS.open("/config.json", "w");
+    if (!configFile) {
+      Serial.println("failed to open config file for writing");
+    }
+
+    json.printTo(Serial);
+    json.printTo(configFile);
+    configFile.close();
+    //end save
+  }
+}
+
+void connectWifi() {
+    //WiFiManager
+  //Local intialization. Once its business is done, there is no need to keep it around
+  WiFiManager wifiManager;
+
+  //for testing:
+  //wifiManager.resetSettings();
+
+  //set config save notify callback
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+
+  //add all your parameters here
+  wifiManager.addParameter(&custom_mqtt_server);
+  wifiManager.addParameter(&custom_mqtt_port);
+  wifiManager.addParameter(&custom_blynk_token);
+
+  //reset settings - for testing
+  //wifiManager.resetSettings();
+
+  //set minimu quality of signal so it ignores AP's under that quality
+  //defaults to 8%
+  //wifiManager.setMinimumSignalQuality();
+
+  //sets timeout until configuration portal gets turned off
+  //useful to make it all retry or go to sleep
+  //in seconds
+  //wifiManager.setTimeout(120);
+
+  //fetches ssid and pass and tries to connect
+  //if it does not connect it starts an access point with the specified name
+  //here  "AutoConnectAP"
+  //and goes into a blocking loop awaiting configuration
+  if (!wifiManager.autoConnect("AutoConnectAP", "password")) {
+    Serial.println("failed to connect and hit timeout");
+    delay(3000);
+    //reset and try again, or maybe put it to deep sleep
+    ESP.reset();
+    delay(5000);
+  }
+
+  //if you get here you have connected to the WiFi
+  Serial.println("connected...yeey :)");
+
+}
 //*********( THE END )***********
