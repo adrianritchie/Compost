@@ -10,7 +10,7 @@
 #include <WifiManager.h>
 #include <ArduinoJson.h>
 
-#include <BlynkSimpleEsp8266_SSL.h>
+#include <BlynkSimpleEsp8266.h>
 
 /*-----( Declare Constants and Pin Numbers )-----*/
 #define SENSOR_PIN 12  // Any pin 2 to 12 (not 13) and A0 to A5
