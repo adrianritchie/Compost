@@ -10,8 +10,11 @@
 #include <WifiManager.h>
 #include <ArduinoJson.h>
 
+#include <BlynkSimpleEsp8266_SSL.h>
+
 /*-----( Declare Constants and Pin Numbers )-----*/
 #define SENSOR_PIN 12  // Any pin 2 to 12 (not 13) and A0 to A5
+#define WIFI_RESET_PIN 14 //connect high to reset
 
 /*-----( Declare objects )-----*/
 OneWire  oneWire(SENSOR_PIN);  // Create a 1-wire object
@@ -38,6 +41,10 @@ WiFiManagerParameter custom_blynk_token("blynk", "blynk token", blynk_token, 32)
 //flag for saving data
 bool shouldSaveConfig = false;
 
+#define BLYNK_PRINT Serial // Defines the object that is used for printing
+#define BLINK_DEBUG
+BlynkTimer timer;
+
 //callback notifying us of the need to save config
 void saveConfigCallback () {
   Serial.println("Should save config");
@@ -46,22 +53,42 @@ void saveConfigCallback () {
 
 void readConfig();
 
-void connectWifi();
-
 void saveConfig();
 
-void printTemperature(DeviceAddress deviceAddress);
+void connectWifi();
+
+void printTemperature(DeviceAddress deviceAddress, int vPin);
+
+void timerCallback();
 
 void setup() {
   Serial.begin(9600);
 
+  pinMode(WIFI_RESET_PIN, INPUT);
+  pinMode(SENSOR_PIN, INPUT);
+
   delay(500);
+
+
 
   readConfig();
   connectWifi();
   saveConfig();
 
-  pinMode(SENSOR_PIN, INPUT);
+  int port_number;
+  port_number = atoi(mqtt_port);
+
+  Serial.print("Blynk token ");
+  Serial.println(blynk_token);
+  Serial.print("Blynk server ");
+  Serial.println(mqtt_server);
+  Serial.print("Blynk port number ");
+  Serial.println(port_number);
+
+  Blynk.config(blynk_token, mqtt_server, port_number);
+  Blynk.connect();
+  timer.setInterval(1000, timerCallback);
+
 
   sensors.setResolution(probe1, 10);
   sensors.setResolution(probe2, 10);
@@ -69,6 +96,15 @@ void setup() {
 }//--(end setup )---
 
 void loop() {
+  if (!Blynk.connected()) {
+    Serial.println("Blynk not connected to server");
+  }
+
+  Blynk.run();
+  timer.run();
+}
+
+void timerCallback() {
   delay(1000);
   Serial.println();
   Serial.print("Number of Devices found on bus = ");
@@ -80,20 +116,20 @@ void loop() {
   sensors.requestTemperatures();
 
   Serial.print("Probe 01 temperature is:   ");
-  printTemperature(probe1);
+  printTemperature(probe1, 5);
   Serial.println();
 
   Serial.print("Probe 02 temperature is:   ");
-  printTemperature(probe2);
+  printTemperature(probe2, 6);
   Serial.println();
 
   Serial.print("Probe 03 temperature is:   ");
-  printTemperature(probe3);
+  printTemperature(probe3, 7);
   Serial.println();
 
 }//--(end main loop )---
 
-void printTemperature(DeviceAddress deviceAddress) {
+void printTemperature(DeviceAddress deviceAddress, int vPin) {
 
   float tempC = sensors.getTempC(deviceAddress);
 
@@ -107,6 +143,8 @@ void printTemperature(DeviceAddress deviceAddress) {
     Serial.print(tempC);
     Serial.print(" F: ");
     Serial.print(DallasTemperature::toFahrenheit(tempC));
+    Blynk.virtualWrite(vPin, tempC);
+    Serial.print(" sent to Blynk");
   }
 }// End printTemperature
 
@@ -182,7 +220,12 @@ void connectWifi() {
   WiFiManager wifiManager;
 
   //for testing:
-  //wifiManager.resetSettings();
+  Serial.print("WIFI_RESET_PIN ");
+  Serial.println(digitalRead(WIFI_RESET_PIN));
+  if (digitalRead(WIFI_RESET_PIN) == LOW) {
+    Serial.println("Resetting WiFi config...");
+    wifiManager.resetSettings();
+  }
 
   //set config save notify callback
   wifiManager.setSaveConfigCallback(saveConfigCallback);
@@ -192,21 +235,8 @@ void connectWifi() {
   wifiManager.addParameter(&custom_mqtt_port);
   wifiManager.addParameter(&custom_blynk_token);
 
-  //reset settings - for testing
-  //wifiManager.resetSettings();
-
-  //set minimu quality of signal so it ignores AP's under that quality
-  //defaults to 8%
-  //wifiManager.setMinimumSignalQuality();
-
-  //sets timeout until configuration portal gets turned off
-  //useful to make it all retry or go to sleep
-  //in seconds
-  //wifiManager.setTimeout(120);
-
   //fetches ssid and pass and tries to connect
-  //if it does not connect it starts an access point with the specified name
-  //here  "AutoConnectAP"
+  //if it does not connect it starts an access point with the specified name here  "AutoConnectAP"
   //and goes into a blocking loop awaiting configuration
   if (!wifiManager.autoConnect("AutoConnectAP", "password")) {
     Serial.println("failed to connect and hit timeout");
