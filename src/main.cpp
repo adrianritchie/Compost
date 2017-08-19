@@ -34,9 +34,9 @@ char blynk_token[34] = "YOUR_BLYNK_TOKEN";
 // The extra parameters to be configured (can be either global or just in the setup)
 // After connecting, parameter.getValue() will get you the configured value
 // id/name placeholder/prompt default length
-WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
-WiFiManagerParameter custom_mqtt_port("port", "mqtt port", mqtt_port, 6);
-WiFiManagerParameter custom_blynk_token("blynk", "blynk token", blynk_token, 32);
+WiFiManagerParameter *custom_mqtt_server = NULL;
+WiFiManagerParameter *custom_mqtt_port = NULL;
+WiFiManagerParameter *custom_blynk_token = NULL;
 
 //flag for saving data
 bool shouldSaveConfig = false;
@@ -175,7 +175,6 @@ void readConfig() {
           strcpy(mqtt_server, json["mqtt_server"]);
           strcpy(mqtt_port, json["mqtt_port"]);
           strcpy(blynk_token, json["blynk_token"]);
-
         } else {
           Serial.println("failed to load json config");
         }
@@ -189,9 +188,9 @@ void readConfig() {
 
 void saveConfig() {
   //read updated parameters
-  strcpy(mqtt_server, custom_mqtt_server.getValue());
-  strcpy(mqtt_port, custom_mqtt_port.getValue());
-  strcpy(blynk_token, custom_blynk_token.getValue());
+  strcpy(mqtt_server, custom_mqtt_server->getValue());
+  strcpy(mqtt_port, custom_mqtt_port->getValue());
+  strcpy(blynk_token, custom_blynk_token->getValue());
 
   //save the custom parameters to FS
   if (shouldSaveConfig) {
@@ -230,10 +229,14 @@ void connectWifi() {
   //set config save notify callback
   wifiManager.setSaveConfigCallback(saveConfigCallback);
 
+  custom_mqtt_server = new WiFiManagerParameter("server", "mqtt server", mqtt_server, 40);
+  custom_mqtt_port = new WiFiManagerParameter("port", "mqtt port", mqtt_port, 6);
+  custom_blynk_token = new WiFiManagerParameter("blynk", "blynk token", blynk_token, 34);
+
   //add all your parameters here
-  wifiManager.addParameter(&custom_mqtt_server);
-  wifiManager.addParameter(&custom_mqtt_port);
-  wifiManager.addParameter(&custom_blynk_token);
+  wifiManager.addParameter(custom_mqtt_server);
+  wifiManager.addParameter(custom_mqtt_port);
+  wifiManager.addParameter(custom_blynk_token);
 
   //fetches ssid and pass and tries to connect
   //if it does not connect it starts an access point with the specified name here  "AutoConnectAP"
